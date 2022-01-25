@@ -1,0 +1,31 @@
+--- a/src/braft/configuration.h
++++ b/src/braft/configuration.h
+@@ -59,9 +59,11 @@
+     int parse(const std::string& str) {
+         reset();
+         char ip_str[64];
+-        if (2 > sscanf(str.c_str(), "%[^:]%*[:]%d%*[:]%d", ip_str, &addr.port, &idx)) {
+-            reset();
+-            return -1;
++        if (2 > sscanf(str.c_str(), "%*[[]%63[^]]%*[]]%*[:]%d%*[:]%d", ip_str, &addr.port, &idx)) {
++            if (2 > sscanf(str.c_str(), "%[^:]%*[:]%d%*[:]%d", ip_str, &addr.port, &idx)) {
++                reset();
++                return -1;
++            }
+         }
+         if (0 != butil::str2ip(ip_str, &addr.ip)) {
+             reset();
+@@ -205,7 +207,12 @@
+ 
+     // True if the peer exists.
+     bool contains(const PeerId& peer_id) const {
+-        return _peers.find(peer_id) != _peers.end();
++        for (auto it = _peers.begin(); it != _peers.end(); ++it) {
++            if (peer_id == *it) {
++                return true;
++            }
++        }
++        return false;
+     }
+ 
+     // True if ALL peers exist.

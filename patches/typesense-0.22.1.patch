@@ -1,0 +1,216 @@
+--- a/include/config.h
++++ b/include/config.h
+@@ -50,7 +50,7 @@
+ protected:
+ 
+     Config() {
+-        this->api_address = "0.0.0.0";
++        this->api_address = "::";
+         this->api_port = 8108;
+         this->peering_port = 8107;
+         this->enable_cors = false;
+--- a/src/raft_server.cpp
++++ b/src/raft_server.cpp
+@@ -134,6 +134,9 @@
+                                               const std::string& nodes_config) {
+     if(nodes_config.empty()) {
+         std::string ip_str = butil::ip2str(peering_endpoint.ip).c_str();
++        if (peering_endpoint.ip.is_ipv6) {
++            ip_str = "[" + ip_str + "]";
++        }
+         return ip_str + ":" + std::to_string(peering_endpoint.port) + ":" + std::to_string(api_port);
+     } else {
+         return resolve_node_hosts(nodes_config);
+@@ -313,9 +316,10 @@
+ 
+ std::string ReplicationState::get_leader_url_path(const std::string& leader_addr, const std::string& path,
+                                                   const std::string& protocol) const {
+-    std::vector<std::string> addr_parts;
+-    StringUtils::split(leader_addr, addr_parts, ":");
+-    std::string leader_host_port = addr_parts[0] + ":" + addr_parts[2];
++    std::string addr_parts[3];
++    size_t index = leader_addr.find_last_of(':');
++    size_t index2 = leader_addr.find_last_of(':', index);
++    std::string leader_host_port = leader_addr.substr(0, index2) + ":" + leader_addr.substr(index + 1);
+     std::string url = protocol + "://" + leader_host_port + path;
+     return url;
+ }
+--- a/src/main/typesense_server.cpp
++++ b/src/main/typesense_server.cpp
+@@ -2,7 +2,6 @@
+ #include "core_api.h"
+ #include "config.h"
+ #include "stackprinter.h"
+-#include "backward.hpp"
+ 
+ extern "C" {
+ #include "jemalloc.h"
+@@ -73,22 +72,6 @@ void master_server_routes() {
+     server->post("/config", post_config, false, false);
+ }
+ 
+-void (*backward::SignalHandling::_callback)(int sig, backward::StackTrace&) = nullptr;
+-
+-void crash_callback(int sig, backward::StackTrace& st) {
+-    backward::TraceResolver tr; tr.load_stacktrace(st);
+-    for (size_t i = 0; i < st.size(); ++i) {
+-        backward::ResolvedTrace trace = tr.resolve(st[i]);
+-        if(trace.object_function.find("BatchedIndexer") != std::string::npos ||
+-           trace.object_function.find("batch_memory_index") != std::string::npos) {
+-            server->persist_applying_index();
+-            break;
+-        }
+-    }
+-
+-    LOG(ERROR) << "Typesense " << TYPESENSE_VERSION << " is terminating abruptly.";
+-}
+-
+ int main(int argc, char **argv) {
+     #ifdef __APPLE__
+     // On OS X, je_zone_register registers jemalloc with the system allocator.
+@@ -125,24 +108,9 @@ int main(int argc, char **argv) {
+         return ret_code;
+     }
+ 
+-#ifdef __APPLE__
+-    #ifdef USE_BACKWARD
+-        backward::SignalHandling sh;
+-        sh._callback = crash_callback;
+-    #else
+-        signal(SIGABRT, StackPrinter::bt_sighandler);
+-        signal(SIGFPE, StackPrinter::bt_sighandler);
+-        signal(SIGILL, StackPrinter::bt_sighandler);
+-        signal(SIGSEGV, StackPrinter::bt_sighandler);
+-    #endif
+-#elif __linux__
+-    backward::SignalHandling sh;
+-    sh._callback = crash_callback;
+-#endif
+-
+     // we can install new signal handlers only after overriding above
+     signal(SIGINT, catch_interrupt);
+     signal(SIGTERM, catch_interrupt);
+ 
+     return run_server(config, TYPESENSE_VERSION, &master_server_routes);
+-}
+\ No newline at end of file
++}
+--- a/src/typesense_server_utils.cpp
++++ b/src/typesense_server_utils.cpp
+@@ -182,23 +182,50 @@
+     return false;
+ }
+ 
+-const char* get_internal_ip() {
++bool is_loopback_ipv6(struct in6_addr addr) {
++    for (int i = 0; i < 15; i++) {
++        if (addr.s6_addr[i] != 0) {
++            return false;
++        }
++    }
++
++    return addr.s6_addr[15] == 1;
++}
++
++const char *get_internal_ip(char *buf, size_t size) {
+     struct ifaddrs *ifap;
+     getifaddrs(&ifap);
+ 
+-    for(auto ifa = ifap; ifa; ifa = ifa->ifa_next) {
+-        if (ifa->ifa_addr && ifa->ifa_addr->sa_family==AF_INET) {
+-            auto sa = (struct sockaddr_in *) ifa->ifa_addr;
+-            if(is_private_ip(ntohl(sa->sin_addr.s_addr))) {
+-                char *ip = inet_ntoa(sa->sin_addr);
+-                freeifaddrs(ifap);
+-                return ip;
++    struct in6_addr *v6 = NULL;
++    struct in_addr *v4 = NULL;
++
++    for (auto ifa = ifap; ifa; ifa = ifa->ifa_next) {
++        if (ifa->ifa_addr) {
++            if (ifa->ifa_addr->sa_family == AF_INET6) {
++                auto sa = (struct sockaddr_in6 *) ifa->ifa_addr;
++                if (!is_loopback_ipv6(sa->sin6_addr)) {
++                    v6 = &sa->sin6_addr;
++                    break;
++                }
++            } else if (v4 == NULL && ifa->ifa_addr->sa_family == AF_INET) {
++                auto sa = (struct sockaddr_in *) ifa->ifa_addr;
++                if(is_private_ip(ntohl(sa->sin_addr.s_addr))) {
++                    v4 = &sa->sin_addr;
++                }
+             }
+         }
+     }
+ 
++    if (v6 != NULL) {
++        inet_ntop(AF_INET6, v6, buf, size);
++    } else if (v4 != NULL) {
++        inet_ntop(AF_INET, v4, buf, size);
++    } else {
++        strncpy(buf, "127.0.0.1", size);
++    }
++
+     freeifaddrs(ifap);
+-    return "127.0.0.1";
++    return buf;
+ }
+ 
+ int start_raft_server(ReplicationState& replication_state, const std::string& state_dir, const std::string& path_to_nodes,
+@@ -222,8 +249,8 @@
+     if(!peering_address.empty()) {
+         ip_conv_status = butil::str2ip(peering_address.c_str(), &peering_ip);
+     } else {
+-        const char* internal_ip = get_internal_ip();
+-        ip_conv_status = butil::str2ip(internal_ip, &peering_ip);
++        char internal_ip[INET6_ADDRSTRLEN];
++        ip_conv_status = butil::str2ip(get_internal_ip(internal_ip, INET6_ADDRSTRLEN), &peering_ip);
+     }
+ 
+     if(ip_conv_status != 0) {
+--- a/src/http_server.cpp
++++ b/src/http_server.cpp
+@@ -118,7 +118,7 @@
+ }
+ 
+ int HttpServer::create_listener() {
+-    struct sockaddr_in addr;
++    struct sockaddr_in6 addr;
+     int fd, reuseaddr_flag = 1;
+ 
+     if(!ssl_cert_path.empty() && !ssl_cert_key_path.empty()) {
+@@ -140,11 +140,17 @@
+     accept_ctx->hosts = config.hosts;
+ 
+     memset(&addr, 0, sizeof(addr));
+-    addr.sin_family = AF_INET;
+-    addr.sin_port = htons(listen_port);
+-    inet_pton(AF_INET, listen_address.c_str(), &(addr.sin_addr));
++    if (listen_address.find(':') == std::string::npos) {
++        ((struct sockaddr_in *) &addr)->sin_family = AF_INET;
++        ((struct sockaddr_in *) &addr)->sin_port = htons(listen_port);
++        inet_pton(AF_INET, listen_address.c_str(), &((struct sockaddr_in *) &addr)->sin_addr);
++    } else {
++        addr.sin6_family = AF_INET6;
++        addr.sin6_port = htons(listen_port);
++        inet_pton(AF_INET6, listen_address.c_str(), &addr.sin6_addr);
++    }
+ 
+-    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1 ||
++    if ((fd = socket(addr.sin6_family, SOCK_STREAM, 0)) == -1 ||
+         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_flag, sizeof(reuseaddr_flag)) != 0 ||
+         bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+         listen(fd, SOMAXCONN) != 0) {
+@@ -169,7 +175,11 @@
+         LOG(ERROR) << "Failed to listen on " << listen_address << ":" << listen_port << " - " << strerror(errno);
+         return 1;
+     } else {
+-        LOG(INFO) << "Typesense has started listening on port " << listen_port;
++        std::string formatted_address = listen_address;
++        if (listen_address.find(':') != std::string::npos) {
++            formatted_address = "[" + listen_address + "]";
++        }
++        LOG(INFO) << "Typesense has started listening on " << formatted_address << ":" << listen_port;
+     }
+ 
+     message_dispatcher->on(STOP_SERVER_MESSAGE, HttpServer::on_stop_server);
