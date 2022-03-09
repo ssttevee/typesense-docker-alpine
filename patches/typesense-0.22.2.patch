@@ -21,17 +21,16 @@
          return ip_str + ":" + std::to_string(peering_endpoint.port) + ":" + std::to_string(api_port);
      } else {
          return resolve_node_hosts(nodes_config);
-@@ -313,9 +316,10 @@
+@@ -313,9 +316,9 @@
  
  std::string ReplicationState::get_leader_url_path(const std::string& leader_addr, const std::string& path,
                                                    const std::string& protocol) const {
 -    std::vector<std::string> addr_parts;
 -    StringUtils::split(leader_addr, addr_parts, ":");
 -    std::string leader_host_port = addr_parts[0] + ":" + addr_parts[2];
-+    std::string addr_parts[3];
 +    size_t index = leader_addr.find_last_of(':');
 +    size_t index2 = leader_addr.find_last_of(':', index);
-+    std::string leader_host_port = leader_addr.substr(0, index2) + ":" + leader_addr.substr(index + 1);
++    std::string leader_host_port = leader_addr.substr(0, index2) + leader_addr.substr(index);
      std::string url = protocol + "://" + leader_host_port + path;
      return url;
  }

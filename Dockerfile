@@ -105,27 +105,27 @@ RUN curl -sL https://github.com/typesense/braft/archive/c649789.tar.gz | tar zx 
     make -C braft-c649789133566dc06e39ebd0c69a824f8e98993a/build install && \
     rm -rf braft-c649789133566dc06e39ebd0c69a824f8e98993a /patches
 
-RUN curl -sL https://github.com/typesense/typesense/archive/refs/tags/v0.22.1.tar.gz | tar zx && \
-    sed -i "s|make \"static_lib|make -j$(nproc) \"static_lib|" typesense-0.22.1/cmake/RocksDB.cmake && \
-    sed -i "s|make \"build_lib_static|make -j$(nproc) \"build_lib_static|" typesense-0.22.1/cmake/Jemalloc.cmake && \
-    sed -i "s|--target s2|--target s2 --parallel $(nproc)|" typesense-0.22.1/cmake/s2.cmake && \
-    cmake -Htypesense-0.22.1 -Btypesense-0.22.1/build \
+RUN curl -sL https://github.com/typesense/typesense/archive/refs/tags/v0.22.2.tar.gz | tar zx && \
+    sed -i "s|make \"static_lib|make -j$(nproc) \"static_lib|" typesense-0.22.2/cmake/RocksDB.cmake && \
+    sed -i "s|make \"build_lib_static|make -j$(nproc) \"build_lib_static|" typesense-0.22.2/cmake/Jemalloc.cmake && \
+    sed -i "s|--target s2|--target s2 --parallel $(nproc)|" typesense-0.22.2/cmake/s2.cmake && \
+    cmake -Htypesense-0.22.2 -Btypesense-0.22.2/build \
         -DCMAKE_BUILD_TYPE=Release \
         -DTYPESENSE_VERSION=0.22.1 && \
-    sed -i 's|-lrt -lpthread|-lrt /usr/lib/libexecinfo.a /usr/lib/libnghttp2.a /usr/lib/libbrotlidec.a /usr/lib/libbrotlicommon.a -lpthread|' typesense-0.22.1/build/CMakeFiles/typesense-server.dir/link.txt
+    sed -i 's|-lrt -lpthread|-lrt /usr/lib/libexecinfo.a /usr/lib/libnghttp2.a /usr/lib/libbrotlidec.a /usr/lib/libbrotlicommon.a -lpthread|' typesense-0.22.2/build/CMakeFiles/typesense-server.dir/link.txt
 
-COPY patches/typesense-0.22.1.patch /patches/typesense-0.22.1.patch
+COPY patches/typesense-0.22.2.patch /patches/typesense-0.22.2.patch
 
 RUN ( \
-        cd typesense-0.22.1 && \
-        patch -p1 < /patches/typesense-0.22.1.patch \
+        cd typesense-0.22.2 && \
+        patch -p1 < /patches/typesense-0.22.2.patch \
     ) && \
-    make -j$(nproc) -C typesense-0.22.1/build typesense-server && \
-    strip typesense-0.22.1/build/typesense-server
+    make -j$(nproc) -C typesense-0.22.2/build typesense-server && \
+    strip typesense-0.22.2/build/typesense-server
 
 FROM alpine:3.15
 
-COPY --from=0 /build/typesense-0.22.1/build/typesense-server /opt/typesense-server
+COPY --from=0 /build/typesense-0.22.2/build/typesense-server /opt/typesense-server
 
 EXPOSE 8108
 
