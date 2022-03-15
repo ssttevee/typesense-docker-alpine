@@ -29,7 +29,7 @@
 -    StringUtils::split(leader_addr, addr_parts, ":");
 -    std::string leader_host_port = addr_parts[0] + ":" + addr_parts[2];
 +    size_t index = leader_addr.find_last_of(':');
-+    size_t index2 = leader_addr.find_last_of(':', index);
++    size_t index2 = leader_addr.find_last_of(':', index-1);
 +    std::string leader_host_port = leader_addr.substr(0, index2) + leader_addr.substr(index);
      std::string url = protocol + "://" + leader_host_port + path;
      return url;
